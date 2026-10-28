@@ -1,0 +1,55 @@
+name: Android APK
+
+# Builds a downloadable prismfall.apk in the cloud — nothing needed locally.
+# Artifacts on every push to main; attaches the APK to a Release when you push a v* tag.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - run: npm install
+      - run: npm run build
+
+      # The android/ project is generated from capacitor.config.ts, not committed
+      - run: npx cap add android
+      - run: npx cap sync android
+
+      - name: Build APK (debug-signed, sideloadable)
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk prismfall.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prismfall-apk
+          path: prismfall.apk
+
+      - name: Attach APK to tag release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: prismfall.apk

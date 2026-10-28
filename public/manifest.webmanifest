@@ -1,0 +1,24 @@
+{
+  "name": "PRISMFALL — Neon Physics Arcade",
+  "short_name": "PRISMFALL",
+  "description": "Drop the orb. Ride the bounces. A neon physics arcade puzzler.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "background_color": "#040211",
+  "theme_color": "#040211",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
