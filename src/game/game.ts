@@ -1,6 +1,6 @@
-// ── PRISMFALL — game orchestration: sim, render, input, juice ───────────────
-// Fixed 120Hz physics substeps behind a rAF loop. Rendering leans on a
-// pre-rendered static layer + baked sprites so phones stay pegged at 60fps.
+// ── PRISMFALL 2.0 — game orchestration: sim, render, input, juice ───────────
+// Fixed 120Hz physics substeps behind a rAF loop. Nova balls (x2), Overdrive
+// streaks (global x2), achievements, run stats, and a live music mix.
 
 import {
   BALL_R,
@@ -12,9 +12,12 @@ import {
   INNER_L,
   INNER_R,
   KILL_Y,
+  LS_ACH,
   LS_BEST,
   MAX_FALL,
   MILESTONE,
+  NOVA_CYCLE,
+  OVERDRIVE_TIME,
   PALETTE,
   RAIL_Y,
   SLOT_COUNT,
@@ -23,12 +26,13 @@ import {
   SPAWN_Y,
   STEP,
   START_BALLS,
+  STREAK_TARGET,
   DRONE_Y,
   BALL_TIER,
   clamp,
   rand,
 } from './core';
-import type { Ball, HudStats, Peg } from './core';
+import type { Ball, HudStats, Peg, RunStats } from './core';
 import { SFX } from './audio';
 import { LAYOUT_COUNT, buildLayout } from './layouts';
 import { FloatTexts, Particles, Rings } from './particles';
@@ -41,7 +45,8 @@ export interface GameEvents {
   onMode: (m: Mode) => void;
   onStats: (s: HudStats) => void;
   onMuted: (m: boolean) => void;
-  onGameOver: (score: number) => void;
+  onGameOver: (score: number, stats: RunStats) => void;
+  onAchievement: (id: string) => void;
 }
 
 function rr(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -55,6 +60,7 @@ function rr(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: num
 }
 
 const PEG_GLOW: Record<Peg['kind'], number> = { score: C.cyan, bumper: C.magenta, multi: C.gold, divider: C.cyan };
+const NOVA_SPRITE = 5;
 
 export class Game {
   private cv: HTMLCanvasElement;
@@ -89,6 +95,12 @@ export class Game {
   private hasDropped = false;
   private celebrate = false;
 
+  // v2 systems
+  private streakSeal = 0;
+  private overdrive = 0;
+  private achSet = new Set<string>();
+  private rs: RunStats = { pegs: 0, drones: 0, topCombo: 1, bestPlay: 0, overdrives: 0, drops: 0 };
+
   // juice
   private trauma = 0;
   private hitstop = 0;
@@ -114,8 +126,13 @@ export class Game {
     this.sprites = buildSprites();
     try {
       this.best = Number(localStorage.getItem(LS_BEST) || 0) || 0;
+      const raw = localStorage.getItem(LS_ACH);
+      if (raw) {
+        const a = JSON.parse(raw);
+        if (Array.isArray(a)) this.achSet = new Set(a as string[]);
+      }
     } catch {
-      this.best = 0;
+      /* fresh profile */
     }
     this.pegs = buildLayout(this.layoutIdx);
 
@@ -142,6 +159,7 @@ export class Game {
 
   destroy() {
     cancelAnimationFrame(this.raf);
+    this.sfx.dispose();
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('orientationchange', this.onResize);
     window.removeEventListener('keydown', this.onKeyDown);
@@ -177,6 +195,9 @@ export class Game {
     this.hasDropped = false;
     this.celebrate = false;
     this.droneT = rand(Math.PI * 2);
+    this.streakSeal = 0;
+    this.overdrive = 0;
+    this.rs = { pegs: 0, drones: 0, topCombo: 1, bestPlay: 0, overdrives: 0, drops: 0 };
     this.setMode('playing');
     this.pushStats(true);
   }
@@ -201,6 +222,8 @@ export class Game {
     this.sfx.ui();
     this.balls.length = 0;
     this.celebrate = false;
+    this.overdrive = 0;
+    this.streakSeal = 0;
     this.setMode('menu');
   }
 
@@ -298,6 +321,53 @@ export class Game {
     }
   };
 
+  // ── v2 helpers ────────────────────────────────────────────────────────────
+
+  private nextIsNova() {
+    return this.rs.drops % NOVA_CYCLE === NOVA_CYCLE - 1;
+  }
+
+  /** Combined score multiplier: ball combo x Nova x Overdrive */
+  private scoreMult(b: Ball) {
+    return b.mult * (b.nova ? 2 : 1) * (this.overdrive > 0 ? 2 : 1);
+  }
+
+  private ach(id: string) {
+    if (this.achSet.has(id)) return;
+    this.achSet.add(id);
+    try {
+      localStorage.setItem(LS_ACH, JSON.stringify([...this.achSet]));
+    } catch {
+      /* ignore */
+    }
+    this.ev.onAchievement(id);
+    this.sfx.achievement();
+    this.parts.confetti(BOARD_W / 2, 230, 22);
+    this.ftexts.spawn(BOARD_W / 2, 240, 'ACHIEVEMENT UNLOCKED', C.gold, 15, true);
+  }
+
+  /** Track consecutive big wins; trigger Overdrive at the target. */
+  private seal(big: boolean) {
+    if (big) this.streakSeal++;
+    else this.streakSeal = 0;
+    if (this.streakSeal >= STREAK_TARGET && this.overdrive <= 0) {
+      this.overdrive = OVERDRIVE_TIME;
+      this.rs.overdrives++;
+      this.ftexts.spawn(BOARD_W / 2, 210, 'OVERDRIVE — ALL SCORES x2', C.magenta, 20, true);
+      this.rings.spawn(BOARD_W / 2, 420, C.magenta, 260, 0.7);
+      this.rings.spawn(BOARD_W / 2, 420, C.white, 180, 0.5);
+      this.parts.confetti(BOARD_W / 2, 420, 40);
+      this.trauma = Math.min(1, this.trauma + 0.25);
+      this.sfx.overdriveOn();
+      this.ach('streak');
+    }
+  }
+
+  private bumpCombo(mult: number) {
+    if (mult > this.rs.topCombo) this.rs.topCombo = mult;
+    if (mult >= 5) this.ach('max-combo');
+  }
+
   // ── sim ───────────────────────────────────────────────────────────────────
 
   private drop() {
@@ -306,6 +376,8 @@ export class Game {
     this.ballsLeft--;
     this.hasDropped = true;
     this.cool = DROP_COOLDOWN;
+    const nova = this.nextIsNova();
+    this.rs.drops++;
     this.balls.push({
       x: this.px,
       y: SPAWN_Y,
@@ -317,11 +389,19 @@ export class Game {
       life: 0,
       spin: 0,
       dead: false,
+      nova,
       trail: [],
     });
     this.sfx.launch();
-    this.parts.burst(this.px, SPAWN_Y, C.cyan, 8, 160, 2.4, 0.4, 500);
-    this.trauma = Math.min(0.5, this.trauma + 0.03);
+    if (nova) {
+      this.sfx.tick();
+      this.parts.burst(this.px, SPAWN_Y, C.gold, 20, 260, 3, 0.55, 600);
+      this.rings.spawn(this.px, SPAWN_Y, C.gold, 60, 0.4);
+      this.trauma = Math.min(1, this.trauma + 0.08);
+    } else {
+      this.parts.burst(this.px, SPAWN_Y, C.cyan, 8, 160, 2.4, 0.4, 500);
+    }
+    this.ach('first-drop');
   }
 
   private droneX() {
@@ -343,34 +423,39 @@ export class Game {
     p.cool = 0.09;
     p.flash = 1;
     p.rot = rand(Math.PI * 2);
+    const sm = this.scoreMult(b);
     let gain = 0;
     if (p.kind === 'score') {
-      gain = 10 * b.mult;
+      gain = 10 * sm;
       b.mult = Math.min(5, b.mult + 1);
       b.combo++;
+      this.rs.pegs++;
       this.parts.burst(p.x, p.y, C.cyan, 10, 210, 2.6, 0.5);
       this.sfx.peg(b.combo);
     } else if (p.kind === 'bumper') {
-      gain = 25 * b.mult;
+      gain = 25 * sm;
       b.mult = Math.min(5, b.mult + 1);
       b.combo++;
+      this.rs.pegs++;
       this.parts.burst(p.x, p.y, C.magenta, 18, 330, 3, 0.6);
       this.rings.spawn(p.x, p.y, C.magenta, 56, 0.4);
       this.trauma = Math.min(1, this.trauma + 0.1);
       this.sfx.bumper();
     } else if (p.kind === 'multi') {
       b.mult = Math.min(5, b.mult + 2);
-      gain = 15 * b.mult;
+      gain = 15 * sm;
       b.combo += 2;
+      this.rs.pegs++;
       this.parts.burst(p.x, p.y, C.gold, 24, 380, 3.2, 0.65);
       this.rings.spawn(p.x, p.y, C.gold, 80, 0.5);
-      this.ftexts.spawn(p.x, p.y - 20, 'x' + b.mult, C.gold, 17, true);
       this.trauma = Math.min(1, this.trauma + 0.12);
       this.sfx.multi();
     } else {
       this.parts.burst(p.x, p.y, C.cyan, 3, 120, 1.8, 0.35);
       this.sfx.tick();
     }
+    this.bumpCombo(b.mult);
+    if (this.rs.pegs >= 100) this.ach('peg-100');
     if (gain > 0) {
       this.addScore(gain);
       this.ftexts.spawn(p.x, p.y - p.r - 8, '+' + gain, PEG_GLOW[p.kind], gain >= 200 ? 16 : 12);
@@ -381,9 +466,12 @@ export class Game {
   private caught(b: Ball) {
     b.dead = true;
     const drx = this.droneX();
-    const gain = 500 * b.mult;
+    const gain = 500 * this.scoreMult(b);
     this.addScore(gain);
     this.ballsLeft++;
+    this.rs.drones++;
+    if (gain > this.rs.bestPlay) this.rs.bestPlay = gain;
+    this.seal(true);
     this.parts.confetti(drx, DRONE_Y, 64);
     this.rings.spawn(drx, DRONE_Y, C.gold, 130, 0.6);
     this.rings.spawn(drx, DRONE_Y, C.white, 90, 0.45);
@@ -392,20 +480,36 @@ export class Game {
     this.trauma = Math.min(1, this.trauma + 0.45);
     this.hitstop = Math.max(this.hitstop, 0.06);
     this.sfx.drone();
+    this.ach('drone-1');
+    if (this.rs.drones >= 3) this.ach('trifecta');
   }
 
   private resolveSlot(b: Ball) {
     b.dead = true;
     const idx = clamp(Math.floor((b.x - INNER_L) / SLOT_W), 0, SLOT_COUNT - 1);
     const base = SLOT_VALUES[idx];
-    const gain = base * b.mult;
+    const gain = base * this.scoreMult(b);
     this.addScore(gain);
+    if (gain > this.rs.bestPlay) this.rs.bestPlay = gain;
+    this.seal(base >= 250);
     const cx = INNER_L + (idx + 0.5) * SLOT_W;
     const ci = base >= 500 ? C.gold : base >= 250 ? C.magenta : C.cyan;
     this.parts.burst(cx, KILL_Y, ci, 20, 320, 3.2, 0.7);
     this.rings.spawn(cx, KILL_Y - 4, ci, 70 + base * 0.12, 0.5);
     this.ftexts.spawn(cx, KILL_Y - 24, '+' + gain, ci, clamp(15 + base / 32, 16, 30), gain >= 500);
     if (b.mult >= 5) this.ftexts.spawn(cx, KILL_Y - 56, 'MAX COMBO!', C.magenta, 16, true);
+    if (b.nova) {
+      // supernova finisher
+      this.parts.confetti(cx, KILL_Y - 10, 44);
+      this.rings.spawn(cx, KILL_Y - 10, C.gold, 170, 0.7);
+      this.rings.spawn(cx, KILL_Y - 10, C.orange, 120, 0.55);
+      this.ftexts.spawn(cx, KILL_Y - 84, base >= 500 ? 'SUPERNOVA!' : 'NOVA BLAST', C.orange, 22, true);
+      this.trauma = Math.min(1, this.trauma + 0.28);
+      this.hitstop = Math.max(this.hitstop, 0.07);
+      this.sfx.nova();
+      if (base >= 500) this.ach('supernova');
+    }
+    if (base >= 500) this.ach('hot-500');
     this.slotFlash[idx] = 1;
     this.trauma = Math.min(1, this.trauma + 0.16 + base / 2200);
     this.hitstop = Math.max(this.hitstop, gain >= 1000 ? 0.05 : 0.028);
@@ -528,6 +632,8 @@ export class Game {
   private finish() {
     this.setMode('over');
     this.sfx.over();
+    if (this.score >= 10000) this.ach('score-10k');
+    if (this.score >= 25000) this.ach('score-25k');
     if (this.score > 0 && this.score >= this.best) {
       this.best = this.score;
       this.celebrate = true;
@@ -537,7 +643,7 @@ export class Game {
         /* ignore */
       }
     }
-    this.ev.onGameOver(this.score);
+    this.ev.onGameOver(this.score, { ...this.rs });
   }
 
   private ambient(dt: number) {
@@ -557,6 +663,17 @@ export class Game {
         this.parts.confetti(rand(60, BOARD_W - 60), rand(160, 420), 26);
       }
     }
+  }
+
+  private musicTarget() {
+    let m = this.mode === 'playing' ? 0.42 : this.mode === 'menu' ? 0.15 : this.mode === 'paused' ? 0.1 : 0.22;
+    if (this.mode === 'playing') {
+      let mx = 1;
+      for (let i = 0; i < this.balls.length; i++) mx = Math.max(mx, this.balls[i].mult);
+      m += (mx - 1) * 0.08;
+    }
+    if (this.overdrive > 0) m = 1;
+    return clamp(m, 0, 1);
   }
 
   // ── frame loop ────────────────────────────────────────────────────────────
@@ -585,6 +702,10 @@ export class Game {
     }
 
     if (this.mode === 'playing') {
+      const odWas = this.overdrive;
+      this.overdrive = Math.max(0, this.overdrive - dtRaw);
+      if (odWas > 0 && this.overdrive === 0) this.streakSeal = 0;
+
       this.acc = Math.min(this.acc + dtRaw, 0.14);
       while (this.acc >= STEP) {
         this.step(STEP);
@@ -606,6 +727,7 @@ export class Game {
       }
     }
 
+    this.sfx.setIntensity(this.musicTarget());
     this.render();
     this.pushStats(false);
   };
@@ -614,10 +736,20 @@ export class Game {
     let m = 1;
     for (let i = 0; i < this.balls.length; i++) m = Math.max(m, this.balls[i].mult);
     const best = Math.max(this.best, this.score);
-    const key = `${this.score}|${this.ballsLeft}|${m}|${best}`;
+    const nextNova = this.ballsLeft > 0 && this.nextIsNova();
+    const od = Math.round(this.overdrive * 10) / 10;
+    const key = `${this.score}|${this.ballsLeft}|${m}|${best}|${this.streakSeal}|${od}|${nextNova}`;
     if (force || key !== this.lastStatsKey) {
       this.lastStatsKey = key;
-      this.ev.onStats({ score: this.score, balls: this.ballsLeft, mult: m, best });
+      this.ev.onStats({
+        score: this.score,
+        balls: this.ballsLeft,
+        mult: m,
+        best,
+        streak: this.streakSeal,
+        overdrive: this.overdrive,
+        nextNova,
+      });
     }
   }
 
@@ -855,9 +987,11 @@ export class Game {
 
     // aim line + dropper (only while playing)
     if (this.mode === 'playing') {
+      const novaNext = this.nextIsNova() && this.ballsLeft > 0;
+      const aimCol = novaNext ? C.gold : C.cyan;
       const aimA = this.cool <= 0 && this.ballsLeft > 0 ? 0.16 : 0.06;
       ctx.save();
-      ctx.strokeStyle = rgba(PALETTE[0], aimA);
+      ctx.strokeStyle = rgba(PALETTE[aimCol], aimA);
       ctx.lineWidth = 2;
       ctx.setLineDash([2, 14]);
       ctx.lineDashOffset = -this.time * 70;
@@ -870,16 +1004,16 @@ export class Game {
       // dropper glow
       ctx.globalCompositeOperation = 'lighter';
       const dg = 92 + Math.sin(this.time * 3) * 8;
-      ctx.globalAlpha = 0.5;
-      ctx.drawImage(this.sprites.dots[C.cyan], this.px - dg / 2, RAIL_Y - dg / 2, dg, dg * 0.55);
+      ctx.globalAlpha = novaNext ? 0.7 : 0.5;
+      ctx.drawImage(this.sprites.dots[aimCol], this.px - dg / 2, RAIL_Y - dg / 2, dg, dg * 0.55);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
 
       // aimed plank under rail (the "cup")
       const plankGrad = ctx.createLinearGradient(this.px - 34, RAIL_Y + 16, this.px + 34, RAIL_Y + 16);
-      plankGrad.addColorStop(0, rgba(PALETTE[0], 0));
-      plankGrad.addColorStop(0.5, rgba(PALETTE[0], this.cool <= 0 ? 0.85 : 0.3));
-      plankGrad.addColorStop(1, rgba(PALETTE[0], 0));
+      plankGrad.addColorStop(0, rgba(PALETTE[aimCol], 0));
+      plankGrad.addColorStop(0.5, rgba(PALETTE[aimCol], this.cool <= 0 ? 0.85 : 0.3));
+      plankGrad.addColorStop(1, rgba(PALETTE[aimCol], 0));
       ctx.strokeStyle = plankGrad;
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -894,7 +1028,7 @@ export class Game {
       rr(ctx, this.px - 33, RAIL_Y - 14, 66, 28, 14);
       ctx.fillStyle = bodyG;
       ctx.fill();
-      ctx.strokeStyle = rgba(PALETTE[0], 0.8);
+      ctx.strokeStyle = rgba(PALETTE[aimCol], 0.8);
       ctx.lineWidth = 1.6;
       ctx.stroke();
 
@@ -902,7 +1036,14 @@ export class Game {
       if (this.ballsLeft > 0) {
         const charge = this.cool <= 0 ? 1 : 1 - this.cool / DROP_COOLDOWN;
         const pop = charge >= 1 ? 1 + Math.sin(this.time * 6) * 0.06 : 0.25 + charge * 0.75;
-        drawSprite(ctx, this.sprites.balls[0], this.px, RAIL_Y, pop, 0, 0.35 + charge * 0.65);
+        drawSprite(ctx, this.sprites.balls[novaNext ? NOVA_SPRITE : 0], this.px, RAIL_Y, pop, this.time * 1.5, 0.35 + charge * 0.65);
+        if (novaNext && this.cool <= 0) {
+          ctx.font = '800 10px Orbitron, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = rgba(PALETTE[C.gold], 0.9);
+          ctx.fillText('NOVA x2', this.px, RAIL_Y - 24);
+        }
       }
 
       // first-drop hint
@@ -931,13 +1072,13 @@ export class Game {
     for (let i = 0; i < this.balls.length; i++) {
       const b = this.balls[i];
       const tier = clamp(b.mult - 1, 0, 4);
-      const col = BALL_TIER[tier];
+      const col = b.nova ? C.gold : BALL_TIER[tier];
       // trail
       const tr = b.trail;
       if (tr.length > 1) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
-        ctx.strokeStyle = rgba(PALETTE[col], 0.3);
+        ctx.strokeStyle = rgba(PALETTE[col], b.nova ? 0.45 : 0.3);
         ctx.lineWidth = b.r * 1.15;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
@@ -947,7 +1088,7 @@ export class Game {
         ctx.stroke();
         ctx.restore();
       }
-      drawSprite(ctx, this.sprites.balls[tier], b.x, b.y, 1, b.spin);
+      drawSprite(ctx, this.sprites.balls[b.nova ? NOVA_SPRITE : tier], b.x, b.y, b.nova ? 1.12 : 1, b.spin);
     }
 
     // fx layers
@@ -956,6 +1097,20 @@ export class Game {
     this.ftexts.render(ctx);
 
     ctx.restore();
+
+    // overdrive edge glow (screen space)
+    if (this.overdrive > 0) {
+      const k = 0.5 + 0.5 * Math.sin(this.time * 7);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.05 + k * 0.05;
+      ctx.fillStyle = PALETTE[C.magenta];
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = rgba(PALETTE[C.magenta], 0.3 + k * 0.3);
+      ctx.lineWidth = 5;
+      ctx.strokeRect(3, 3, w - 6, h - 6);
+      ctx.globalCompositeOperation = 'source-over';
+    }
   }
 
   private renderDrone(ctx: CanvasRenderingContext2D) {

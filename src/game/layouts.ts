@@ -17,7 +17,7 @@ const mk = (u: number, y: number, kind: Peg['kind']): Peg => ({
   rot: Math.random() * Math.PI * 2,
 });
 
-export const LAYOUT_COUNT = 3;
+export const LAYOUT_COUNT = 5;
 
 export function buildLayout(idx: number): Peg[] {
   const pegs: Peg[] = [];
@@ -54,7 +54,7 @@ export function buildLayout(idx: number): Peg[] {
       pegs.push(mk(0.07, 226 + r * 62, r === 1 ? 'bumper' : 'score'));
       pegs.push(mk(0.93, 226 + r * 62, r === 2 ? 'bumper' : 'score'));
     }
-  } else {
+  } else if (v === 2) {
     // TWIN SPIRES — two vertical towers with a bridging arc
     for (let r = 0; r < 5; r++) {
       pegs.push(mk(0.27 + j(0.01), 200 + r * 64, r === 2 ? 'multi' : 'score'));
@@ -73,6 +73,42 @@ export function buildLayout(idx: number): Peg[] {
     pegs.push(mk(0.92, 300, 'multi'));
     pegs.push(mk(0.13, 430, 'bumper'));
     pegs.push(mk(0.87, 430, 'bumper'));
+  } else if (v === 3) {
+    // PINWHEEL — three concentric rings spinning around mid-board
+    const cy = 366;
+    const ring = (count: number, rad: number, kindAt: (i: number) => Peg['kind'], spin = 0) => {
+      for (let i = 0; i < count; i++) {
+        const a = spin + (i / count) * Math.PI * 2;
+        pegs.push(mk(clampU(0.5 + Math.cos(a) * (rad / 448)), cy + Math.sin(a) * rad * 0.92, kindAt(i)));
+      }
+    };
+    ring(6, 86, (i) => (i % 3 === 0 ? 'bumper' : 'score'), 0.2);
+    ring(8, 152, (i) => (i % 4 === 2 ? 'multi' : 'score'), 0.43);
+    ring(10, 220, (i) => (i === 0 || i === 5 ? 'bumper' : 'score'), 0.12);
+    pegs.push(mk(0.09, 200, 'multi'));
+    pegs.push(mk(0.91, 200, 'multi'));
+    pegs.push(mk(0.07, 480, 'bumper'));
+    pegs.push(mk(0.93, 480, 'bumper'));
+  } else {
+    // HEX POCKETS — two trap hexagons with bumper hearts
+    const hex = (cu: number, chy: number, rad: number) => {
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 6 + (i * Math.PI) / 3;
+        pegs.push(
+          mk(clampU(cu + Math.cos(a) * (rad / 448)), chy + Math.sin(a) * rad, i % 2 === 1 ? 'multi' : 'score'),
+        );
+      }
+      pegs.push(mk(cu, chy, 'bumper'));
+    };
+    hex(0.29, 256, 76);
+    hex(0.71, 452, 76);
+    pegs.push(mk(0.5, 208, 'multi'));
+    pegs.push(mk(0.5, 316, 'score'));
+    pegs.push(mk(0.12, 420, 'score'));
+    pegs.push(mk(0.88, 420, 'score'));
+    pegs.push(mk(0.5, 536, 'bumper'));
+    pegs.push(mk(0.17, 554, 'score'));
+    pegs.push(mk(0.83, 554, 'score'));
   }
 
   // slot dividers — plinko rails above the score wells

@@ -107,6 +107,49 @@ function bakeBall(tier: number): HTMLCanvasElement {
   });
 }
 
+function bakeNovaBall(): HTMLCanvasElement {
+  const S = 64;
+  return bake(S, (g) => {
+    const cx = S / 2;
+    // golden supernova aura
+    const aura = g.createRadialGradient(cx, cx, 6, cx, cx, S / 2);
+    aura.addColorStop(0, rgba(PALETTE[2], 0.5));
+    aura.addColorStop(1, rgba(PALETTE[2], 0));
+    g.fillStyle = aura;
+    g.fillRect(0, 0, S, S);
+    // molten core
+    const body = g.createRadialGradient(cx - 4, cx - 5, 2, cx, cx, 14);
+    body.addColorStop(0, '#ffffff');
+    body.addColorStop(0.4, '#ffe9b0');
+    body.addColorStop(0.75, PALETTE[2]);
+    body.addColorStop(1, '#7a3c00');
+    g.fillStyle = body;
+    g.beginPath();
+    g.arc(cx, cx, 13.5, 0, Math.PI * 2);
+    g.fill();
+    // double rim
+    g.strokeStyle = 'rgba(255,255,255,0.95)';
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.arc(cx, cx, 13.2, 0, Math.PI * 2);
+    g.stroke();
+    g.strokeStyle = rgba(PALETTE[2], 0.8);
+    g.beginPath();
+    g.arc(cx, cx, 16.5, 0, Math.PI * 2);
+    g.stroke();
+    // 4-point sparkle
+    g.strokeStyle = 'rgba(255,255,255,0.9)';
+    g.lineWidth = 1.4;
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      g.beginPath();
+      g.moveTo(cx + Math.cos(a) * 8, cx + Math.sin(a) * 8);
+      g.lineTo(cx + Math.cos(a) * 11.5, cx + Math.sin(a) * 11.5);
+      g.stroke();
+    }
+  });
+}
+
 function bakePeg(kind: PegKind): HTMLCanvasElement {
   const S = 64;
   const col =
@@ -164,7 +207,7 @@ function bakePeg(kind: PegKind): HTMLCanvasElement {
 export function buildSprites(): Sprites {
   return {
     dots: PALETTE.map((c) => bakeDot(c)),
-    balls: [0, 1, 2, 3, 4].map((t) => bakeBall(t)),
+    balls: [...[0, 1, 2, 3, 4].map((t) => bakeBall(t)), bakeNovaBall()],
     pegs: {
       score: bakePeg('score'),
       bumper: bakePeg('bumper'),

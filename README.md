@@ -11,9 +11,12 @@ sprites for a locked 60fps on desktop and mobile.
 - **Mouse / touch** — drag to aim, release to drop
 - **Keyboard** — `A`/`D` or arrows to move, `Space` to drop, `P` pause, `R` restart, `M` mute
 
-Combo pegs raise each ball's multiplier, pink bumpers kick hard, gold diamonds double it,
-the golden drone awards +500x and a bonus ball, and every 7,500 points earns an extra ball.
-High scores persist locally.
+Combo pegs raise each ball's multiplier up to x5, pink bumpers kick hard, gold diamonds
+double it. Every 4th drop arms a **Nova ball** (x2 scoring, supernova explosion on big
+wells). Land three 250+ wells in a row to trigger **Overdrive** — 8 seconds of global x2
+with a full-band synthwave mix. The golden drone awards +500x and a bonus ball, every
+7,500 points earns an extra ball, and 10 achievements plus a local leaderboard persist
+between sessions. Five rotating board layouts keep every run fresh.
 
 ## Develop
 

@@ -21,6 +21,9 @@ export const STEP = 1 / 120;
 export const START_BALLS = 8;
 export const MILESTONE = 7500;
 export const DROP_COOLDOWN = 0.55;
+export const NOVA_CYCLE = 4; // every 4th drop is a Nova ball (x2 scoring)
+export const STREAK_TARGET = 3; // big wells in a row to trigger Overdrive
+export const OVERDRIVE_TIME = 8; // seconds of global x2
 
 // palette indexes
 export const C = {
@@ -79,6 +82,7 @@ export interface Ball {
   life: number;
   spin: number;
   dead: boolean;
+  nova: boolean;
   trail: TrailPt[];
 }
 
@@ -87,8 +91,21 @@ export interface HudStats {
   balls: number;
   mult: number;
   best: number;
+  streak: number;
+  overdrive: number;
+  nextNova: boolean;
+}
+
+export interface RunStats {
+  pegs: number;
+  drones: number;
+  topCombo: number;
+  bestPlay: number;
+  overdrives: number;
+  drops: number;
 }
 
 export const LS_BEST = 'prismfall-best';
 export const LS_SCORES = 'prismfall-scores-v1';
 export const LS_MUTED = 'prismfall-muted';
+export const LS_ACH = 'prismfall-ach-v1';

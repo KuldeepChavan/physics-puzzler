@@ -1,4 +1,5 @@
-// ── Synthesized WebAudio SFX — no assets, all oscillators & filtered noise ──
+// ── Synthesized WebAudio — SFX + a procedural synthwave music engine ────────
+// Everything is oscillators & filtered noise: no audio assets.
 
 import { LS_MUTED } from './core';
 
@@ -20,11 +21,30 @@ interface NoiseOpts {
   type?: BiquadFilterType;
 }
 
+const midi = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+// Am → F → C → G pads: [root, chord tones…]
+const CHORDS: ReadonlyArray<readonly number[]> = [
+  [45, 57, 60, 64],
+  [41, 53, 57, 60],
+  [48, 52, 55, 60],
+  [43, 50, 55, 59],
+];
+const ARP_SEQ = [1, 2, 3, 2, 1, 3, 2, 3];
+const EIGHTH = 60 / (112 * 2); // 112 BPM eighth notes
+
 export class SFX {
   muted = false;
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
+
+  // music engine state
+  private mTimer: ReturnType<typeof setInterval> | null = null;
+  private mStep = 0;
+  private mNext = 0;
+  private mInt = 0;
 
   constructor() {
     try {
@@ -50,9 +70,21 @@ export class SFX {
         this.noiseBuf = buf;
       }
       if (this.ctx.state === 'suspended') void this.ctx.resume();
+      this.startMusic();
     } catch {
       /* audio unavailable — stay silent */
     }
+  }
+
+  dispose() {
+    if (this.mTimer !== null) clearInterval(this.mTimer);
+    this.mTimer = null;
+    try {
+      void this.ctx?.close();
+    } catch {
+      /* ignore */
+    }
+    this.ctx = null;
   }
 
   setMuted(m: boolean) {
@@ -67,10 +99,15 @@ export class SFX {
     }
   }
 
-  private tone(o: ToneOpts) {
+  /** 0..1 — drives how much of the arrangement plays (pads → full band) */
+  setIntensity(v: number) {
+    this.mInt = clamp01(v);
+  }
+
+  private tone(o: ToneOpts, when?: number) {
     if (!this.ctx || !this.master) return;
     try {
-      const t = this.ctx.currentTime + (o.dl ?? 0);
+      const t = (when ?? this.ctx.currentTime) + (o.dl ?? 0);
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
       osc.type = o.type ?? 'sine';
@@ -88,10 +125,10 @@ export class SFX {
     }
   }
 
-  private noise(o: NoiseOpts) {
+  private noise(o: NoiseOpts, when?: number) {
     if (!this.ctx || !this.master || !this.noiseBuf) return;
     try {
-      const t = this.ctx.currentTime + (o.dl ?? 0);
+      const t = (when ?? this.ctx.currentTime) + (o.dl ?? 0);
       const src = this.ctx.createBufferSource();
       src.buffer = this.noiseBuf;
       src.loop = true;
@@ -113,7 +150,63 @@ export class SFX {
     }
   }
 
-  // Pentatonic pop ladder — each consecutive peg hit climbs the scale.
+  // ── music engine (lookahead scheduler) ────────────────────────────────────
+
+  private startMusic() {
+    if (!this.ctx || this.mTimer !== null) return;
+    this.mStep = 0;
+    this.mNext = this.ctx.currentTime + 0.1;
+    this.mTimer = setInterval(() => this.mSchedule(), 60);
+  }
+
+  private mSchedule() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    while (this.mNext < ctx.currentTime + 0.22) {
+      this.mPlay(this.mStep, this.mNext);
+      this.mStep++;
+      this.mNext += EIGHTH;
+    }
+  }
+
+  private mPlay(s: number, t: number) {
+    const i = this.mInt;
+    if (i <= 0.02) return;
+    const step = s % 16;
+    const ch = CHORDS[(s >> 2) % 4];
+
+    // warm pad on each chord change
+    if (step % 4 === 0) {
+      for (let k = 0; k < ch.length; k++) {
+        this.tone({ f: midi(ch[k]), d: 1.9, type: 'triangle', v: 0.02 + 0.022 * i, dl: k * 0.012 }, t);
+      }
+    }
+    // bass pulse
+    if (step % 2 === 0) {
+      this.tone({ f: midi(ch[0]), d: 0.28, type: 'triangle', v: 0.05 + 0.05 * i }, t);
+    }
+    // hats
+    if (i > 0.35) {
+      this.noise({ d: 0.03, v: 0.04 * (i - 0.3), f: 7000, type: 'highpass' }, t);
+    }
+    // kick
+    if (i > 0.45 && step % 4 === 0) {
+      this.tone({ f: 120, f1: 42, d: 0.11, type: 'sine', v: 0.15 * i }, t);
+    }
+    // snare
+    if (i > 0.55 && step % 8 === 4) {
+      this.noise({ d: 0.09, v: 0.05 * i, f: 1800, type: 'bandpass' }, t);
+    }
+    // arp sparkle on off-beats
+    if (i > 0.5 && step % 2 === 1) {
+      const n = ch[ARP_SEQ[(step >> 1) % 8] % ch.length] + 12;
+      this.tone({ f: midi(n), d: 0.14, type: 'square', v: 0.02 + 0.05 * (i - 0.5) }, t);
+    }
+  }
+
+  // ── SFX ───────────────────────────────────────────────────────────────────
+
+  /** Pentatonic pop ladder — each consecutive peg hit climbs the scale. */
   peg(step: number) {
     const scale = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28];
     const s = scale[Math.min(Math.max(step, 0), scale.length - 1)];
@@ -151,9 +244,29 @@ export class SFX {
     this.noise({ d: 0.5, v: 0.08, f: 3000, type: 'highpass' });
   }
 
+  nova() {
+    [0, 3, 7, 10, 14, 17, 21].forEach((s, i) =>
+      this.tone({ f: 370 * Math.pow(2, s / 12), d: 0.34, dl: i * 0.04, v: 0.16, type: 'sawtooth' }),
+    );
+    this.noise({ d: 0.7, v: 0.12, f: 400, f1: 5000 });
+  }
+
   launch() {
     this.noise({ d: 0.16, v: 0.15, f: 1800, f1: 300 });
     this.tone({ f: 240, f1: 120, d: 0.12, v: 0.1, type: 'triangle' });
+  }
+
+  overdriveOn() {
+    [0, 7, 12, 19, 24].forEach((s, i) =>
+      this.tone({ f: 330 * Math.pow(2, s / 12), d: 0.3, dl: i * 0.05, v: 0.16, type: 'square' }),
+    );
+    this.noise({ d: 0.6, v: 0.1, f: 6000, type: 'highpass' });
+  }
+
+  achievement() {
+    [12, 16, 19, 24, 28].forEach((s, i) =>
+      this.tone({ f: 392 * Math.pow(2, s / 12), d: 0.26, dl: i * 0.06, v: 0.14, type: 'triangle' }),
+    );
   }
 
   milestone() {

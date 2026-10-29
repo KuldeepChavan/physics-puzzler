@@ -132,3 +132,17 @@ button {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 4px;
 }
+
+/* overdrive banner pulse */
+@keyframes pulseOd {
+  0%,
+  100% {
+    box-shadow: 0 0 14px rgba(255, 61, 242, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 34px rgba(255, 61, 242, 0.65);
+  }
+}
+.od-chip {
+  animation: pulseOd 0.9s ease-in-out infinite;
+}
